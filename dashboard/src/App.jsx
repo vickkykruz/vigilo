@@ -1,77 +1,168 @@
 import { useState, useEffect, useRef } from "react"
 import { io } from "socket.io-client"
-import ThreatFeed from "./components/ThreatFeed"
-import StatusBanner from "./components/StatusBanner"
+import RadarMap from "./components/RadarMap"
 import NetworkStats from "./components/NetworkStats"
+import ThreatFeed from "./components/ThreatFeed"
 import "./App.css"
  
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000"
  
 export default function App() {
-  const [threats, setThreats] = useState([])
-  const [connected, setConnected] = useState(false)
-  const [networkStatus, setNetworkStatus] = useState("safe")
-  const socketRef = useRef(null)
+  const [threats, setThreats]           = useState([])
+  const [connected, setConnected]       = useState(false)
+  const [activeThreat, setActiveThreat] = useState(null)   // current live threat on radar
+  const [neutralised, setNeutralised]   = useState(false)  // neutralised overlay
+  const [flashClass, setFlashClass]     = useState("")      // screen flash
+  const [uptime, setUptime]             = useState("00:00")
+  const [clock, setClock]               = useState("")
+  const socketRef  = useRef(null)
+  const uptimeRef  = useRef(0)
+  const neutralRef = useRef(null)
  
+  // ── Clock ──
   useEffect(() => {
+    const tick = () => setClock(new Date().toUTCString().slice(17, 25) + " UTC")
+    tick()
+    const id = setInterval(tick, 1000)
+    return () => clearInterval(id)
+  }, [])
+ 
+  // ── Uptime ──
+  useEffect(() => {
+    const id = setInterval(() => {
+      uptimeRef.current++
+      const m = String(Math.floor(uptimeRef.current / 60)).padStart(2, "0")
+      const s = String(uptimeRef.current % 60).padStart(2, "0")
+      setUptime(`${m}:${s}`)
+    }, 1000)
+    return () => clearInterval(id)
+  }, [])
+ 
+  // ── Socket.IO ──
+  useEffect(() => {
+    // Load existing threats from this session
     fetch(`${API_URL}/api/threats`)
       .then((r) => r.json())
-      .then((data) => {
-        if (data.threats.length > 0) {
-          setThreats(data.threats)
-          setNetworkStatus("threat")
-        }
-      })
+      .then((data) => { if (data.threats?.length) setThreats(data.threats) })
       .catch(() => {})
  
     socketRef.current = io(API_URL, { transports: ["websocket"] })
  
-    socketRef.current.on("connect", () => setConnected(true))
+    socketRef.current.on("connect",    () => setConnected(true))
     socketRef.current.on("disconnect", () => setConnected(false))
+ 
     socketRef.current.on("threat_detected", (threat) => {
+      // Add to log
       setThreats((prev) => [threat, ...prev])
-      setNetworkStatus("threat")
+ 
+      // Show on radar
+      setActiveThreat(threat)
+      triggerFlash("rgba(255,45,85,0.12)")
+ 
+      // Clear any pending neutralise timer
+      if (neutralRef.current) clearTimeout(neutralRef.current)
+ 
+      // Auto neutralise after 3.5s (matches monitor response time)
+      neutralRef.current = setTimeout(() => {
+        setNeutralised(true)
+        triggerFlash("rgba(0,221,180,0.08)")
+        setTimeout(() => {
+          setActiveThreat(null)
+          setNeutralised(false)
+        }, 2800)
+      }, 3500)
     })
+ 
     socketRef.current.on("threats_cleared", () => {
       setThreats([])
-      setNetworkStatus("safe")
+      setActiveThreat(null)
+      setNeutralised(false)
     })
  
-    return () => socketRef.current.disconnect()
+    return () => {
+      socketRef.current.disconnect()
+      if (neutralRef.current) clearTimeout(neutralRef.current)
+    }
   }, [])
  
-  const handleClear = async () => {
-    await fetch(`${API_URL}/api/threats/clear`, { method: "POST" })
+  function triggerFlash(color) {
+    setFlashClass("show")
+    document.documentElement.style.setProperty("--flash-color", color)
+    setTimeout(() => setFlashClass(""), 350)
   }
  
+  const isThreat = !!activeThreat && !neutralised
+ 
   return (
-    <div className="app">
-      <header className="app-header">
-        <div className="header-left">
-          <div className="logo">
-            <span className="logo-icon" />
-            <span className="logo-text">Vigilo</span>
-          </div>
-          <span className="logo-tagline">Autonomous Network Protection</span>
-        </div>
-        <div className="header-right">
-          <div className={`connection-pill ${connected ? "online" : "offline"}`}>
-            <span className="pulse-dot" />
-            {connected ? "Live monitoring" : "Connecting..."}
-          </div>
-        </div>
-      </header>
+    <>
+      {/* Screen flash */}
+      <div
+        className={`threat-flash ${flashClass}`}
+        style={{ background: "var(--flash-color, rgba(255,45,85,0.1))" }}
+      />
  
-      <main className="app-main">
-        <StatusBanner status={networkStatus} threatCount={threats.length} />
-        <NetworkStats threats={threats} />
-        <ThreatFeed threats={threats} onClear={handleClear} />
-      </main>
+      <div className="app">
  
-      <footer className="app-footer">
-        <p>Vigilo v1.0 &mdash; All threats neutralised automatically</p>
-      </footer>
-    </div>
+        {/* HEADER */}
+        <header className="app-header">
+          <div className="logo-wrap">
+            <div className="logo-mark"/>
+            <div>
+              <div className="logo-name">VIGILO</div>
+              <div className="logo-sub">Autonomous Network Protection System</div>
+            </div>
+          </div>
+          <div className="header-right">
+            <div className={`status-pill ${isThreat ? "threat" : "secure"}`}>
+              <span className="pill-dot"/>
+              <span>{isThreat ? "THREAT DETECTED" : "NETWORK SECURED"}</span>
+            </div>
+            <div className="app-clock">{clock}</div>
+          </div>
+        </header>
+ 
+        {/* MAIN */}
+        <div className="app-main">
+ 
+          {/* RADAR PANEL */}
+          <div className="radar-panel">
+            <div className="radar-title">
+              ◈ Live Network Topology — Sentinel Mode Active
+            </div>
+            <RadarMap threat={activeThreat} neutralised={neutralised}/>
+            <div style={{
+              fontSize: "9px", letterSpacing: "2px", color: "var(--text-dim)",
+              display: "flex", alignItems: "center", gap: "8px"
+            }}>
+              <span style={{
+                width: "6px", height: "6px", borderRadius: "50%",
+                background: connected ? "var(--cyan)" : "var(--red)",
+                display: "inline-block"
+              }}/>
+              {connected ? "SENTINEL CONNECTED — LIVE MONITORING" : "CONNECTING TO SENTINEL..."}
+            </div>
+          </div>
+ 
+          {/* SIDE PANEL */}
+          <div className="side-panel">
+            <NetworkStats threats={threats} uptime={uptime}/>
+            <ThreatFeed threats={threats} blinking={isThreat}/>
+          </div>
+        </div>
+ 
+        {/* STATUS BAR */}
+        <footer className="app-footer">
+          <span>VIGILO v1.0 &nbsp;|&nbsp; UNIVERSITY OF LANCASHIRE HACKATHON MAY 2026</span>
+          <div className="bar-right">
+            <div className="bar-dot" style={{ background: isThreat ? "var(--red)" : "var(--cyan)" }}/>
+            <span style={{ color: isThreat ? "var(--red)" : "" }}>
+              {isThreat ? "⚠ HOSTILE DEVICE DETECTED — VIGILO RESPONDING" : "ALL SYSTEMS NOMINAL"}
+            </span>
+          </div>
+        </footer>
+ 
+      </div>
+    </>
   )
 }
  
