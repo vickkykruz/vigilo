@@ -86,7 +86,7 @@ def receive_threat():
     log.info("Threat pushed to dashboard via Socket.IO")
  
     # Fire the email alert
-    owner_email = os.environ.get("OWNER_EMAIL", "owner@yourhostel.com")
+    owner_email = os.environ.get("OWNER_EMAIL", "")
     try:
         send_threat_email(owner_email, threat)
         log.info(f"Email alert sent to {owner_email}")
@@ -128,7 +128,13 @@ def on_disconnect():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     log.info(f"Vigilo API starting on port {port}")
-    socketio.run(app, host="0.0.0.0", port=port, debug=False)
+    socketio.run(
+        app,
+        host="0.0.0.0",
+        port=port,
+        debug=False,
+        allow_unsafe_werkzeug=True
+    )
  
  
 # ── React dashboard catch-all ─────────────────────────────────────────────────
