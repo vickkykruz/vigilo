@@ -20,7 +20,7 @@ import logging
 from datetime import datetime
 from scapy.all import (
     ARP, Ether, srp, sendp, sniff,
-    get_if_hwaddr, get_if_addr, get_if_netmask, conf
+    get_if_hwaddr, get_if_addr, conf
 )
  
 logging.basicConfig(
@@ -46,9 +46,34 @@ def get_mac(ip: str, interface: str) -> str | None:
  
  
 def get_subnet(interface: str) -> str:
-    """Derive the subnet CIDR from the interface IP and netmask."""
+    """
+    Derive the subnet CIDR from the interface.
+    Uses socket/fcntl (always available) instead of Scapy's
+    get_if_netmask which was removed in recent Scapy versions.
+    Falls back to /24 if detection fails.
+    """
+    import socket
+    import struct
+ 
+    try:
+        import fcntl
+        # SIOCGIFNETMASK — ioctl call to get interface netmask
+        SIOCGIFNETMASK = 0x891b
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        netmask = socket.inet_ntoa(
+            fcntl.ioctl(
+                s.fileno(),
+                SIOCGIFNETMASK,
+                struct.pack("256s", interface[:15].encode())
+            )[20:24]
+        )
+        s.close()
+    except Exception:
+        # Fallback to /24 — works for most home/office networks
+        log.warning("Could not detect netmask — defaulting to /24")
+        netmask = "255.255.255.0"
+ 
     ip      = get_if_addr(interface)
-    netmask = get_if_netmask(interface)
     network = ipaddress.IPv4Network(f"{ip}/{netmask}", strict=False)
     return str(network)
  
