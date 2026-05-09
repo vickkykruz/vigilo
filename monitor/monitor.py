@@ -166,22 +166,42 @@ def send_corrective_arp(target_ip: str, real_mac: str,
  
 # ── Periodic device scanner ────────────────────────────────────────────────────
  
+# Signal flag — set to True when network drops to exit cleanly
+_stop_event = threading.Event()
+ 
+ 
+def check_network_alive(interface: str) -> bool:
+    """Return True if the interface still has a valid IP address."""
+    try:
+        ip = get_if_addr(interface)
+        return ip not in ("", "0.0.0.0", None)
+    except Exception:
+        return False
+ 
+ 
 def device_scan_loop(interface: str, gateway_ip: str,
                      api_url: str, interval: int = 30) -> None:
     """
     Background thread — scans the network every `interval` seconds
     and reports real devices to the dashboard.
+    Exits cleanly when _stop_event is set (network drop detected).
     """
     own_ip = get_own_ip(interface)
     log.info(f"Device scanner started — scanning every {interval}s")
  
-    while True:
+    while not _stop_event.is_set():
         try:
+            # Check network is still alive before scanning
+            if not check_network_alive(interface):
+                log.warning("Network interface lost — stopping scanner")
+                _stop_event.set()
+                break
+ 
             subnet  = get_subnet(interface)
             devices = scan_network(subnet, interface)
             report_devices(api_url, devices, own_ip, gateway_ip)
  
-            # Also seed ARP table with discovered devices
+            # Seed ARP table with discovered devices
             for device in devices:
                 if device["ip"] not in arp_table:
                     arp_table[device["ip"]] = device["mac"]
@@ -189,7 +209,11 @@ def device_scan_loop(interface: str, gateway_ip: str,
         except Exception as e:
             log.warning(f"Device scan error: {e}")
  
-        time.sleep(interval)
+        # Sleep in small chunks so stop_event is checked frequently
+        for _ in range(interval):
+            if _stop_event.is_set():
+                break
+            time.sleep(1)
  
  
 # ── ARP packet handler ─────────────────────────────────────────────────────────
@@ -282,14 +306,27 @@ def main():
  
     log.info("Monitoring for ARP spoofing... (Ctrl+C to stop)")
  
+    def stop_filter(pkt):
+        """Stop sniffing if network drops or stop event is set."""
+        if _stop_event.is_set():
+            return True
+        if not check_network_alive(args.interface):
+            log.warning("Network dropped — stopping monitor")
+            _stop_event.set()
+            return True
+        return False
+ 
     sniff(
         iface=args.interface,
         filter="arp",
         prn=lambda pkt: handle_packet(
             pkt, args.interface, args.gateway, args.api
         ),
+        stop_filter=stop_filter,
         store=False
     )
+ 
+    log.info("Monitor stopped — network change detected")
  
  
 if __name__ == "__main__":
