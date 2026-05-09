@@ -26,9 +26,29 @@ if (Test-Path $envFile) {
   Write-Host "[!!] .env file not found — run install.ps1 first." -ForegroundColor Yellow
 }
  
-# ── Start Flask API ───────────────────────────────────────────
-Write-Host "[>>] Starting Vigilo API..." -ForegroundColor Cyan
+$PORT = if ($env:PORT) { $env:PORT } else { "5000" }
  
+# ── Check port is free ────────────────────────────────────────
+Write-Host "[>>] Checking port $PORT is available..." -ForegroundColor Cyan
+ 
+$portInUse = Get-NetTCPConnection -LocalPort $PORT -ErrorAction SilentlyContinue
+if ($portInUse) {
+  $pidUsing = $portInUse.OwningProcess | Select-Object -First 1
+  $procName = (Get-Process -Id $pidUsing -ErrorAction SilentlyContinue).ProcessName
+ 
+  Write-Host ""
+  Write-Host "[XX] Port $PORT is already in use." -ForegroundColor Red
+  Write-Host "     Process : $procName (PID $pidUsing)" -ForegroundColor Yellow
+  Write-Host ""
+  Write-Host "     To kill it run:" -ForegroundColor Yellow
+  Write-Host "     Stop-Process -Id $pidUsing -Force" -ForegroundColor White
+  Write-Host "     Then re-run: .\start.ps1" -ForegroundColor White
+  exit 1
+}
+ 
+Write-Host "[OK] Port $PORT is free" -ForegroundColor Green
+ 
+# ── Verify files exist ────────────────────────────────────────
 $pythonExe = "$ROOT\api\venv\Scripts\python.exe"
 $appScript  = "$ROOT\api\app.py"
  
@@ -36,40 +56,65 @@ if (-not (Test-Path $pythonExe)) {
   Write-Host "[XX] Python venv not found. Run install.ps1 first." -ForegroundColor Red
   exit 1
 }
- 
 if (-not (Test-Path $appScript)) {
   Write-Host "[XX] app.py not found at $appScript" -ForegroundColor Red
   exit 1
 }
  
-# Start process and capture it so we can verify it stayed running
+# ── Start Flask API ───────────────────────────────────────────
+Write-Host "[>>] Starting Vigilo API on port $PORT..." -ForegroundColor Cyan
+ 
 $process = Start-Process `
   -FilePath $pythonExe `
   -ArgumentList $appScript `
   -PassThru `
   -WindowStyle Normal
  
-Start-Sleep -Seconds 3
+# ── Wait and verify API is actually serving ───────────────────
+Write-Host "     Waiting for API to be ready..." -ForegroundColor Cyan
  
-# ── Verify API started successfully ───────────────────────────
-if ($process.HasExited) {
+$ready = $false
+for ($i = 1; $i -le 5; $i++) {
+  Start-Sleep -Seconds 1
+ 
+  # Check process is still alive
+  if ($process.HasExited) {
+    Write-Host ""
+    Write-Host "[XX] API process died during startup (exit code: $($process.ExitCode))." -ForegroundColor Red
+    Write-Host "     Run manually to see the error:" -ForegroundColor Yellow
+    Write-Host "     $pythonExe $appScript" -ForegroundColor White
+    exit 1
+  }
+ 
+  # Check if API is actually responding
+  try {
+    $response = Invoke-WebRequest `
+      -Uri "http://localhost:$PORT/api/health" `
+      -UseBasicParsing `
+      -TimeoutSec 2 `
+      -ErrorAction SilentlyContinue
+    if ($response.StatusCode -eq 200) {
+      $ready = $true
+      break
+    }
+  } catch {
+    # Not ready yet — keep waiting
+  }
+}
+ 
+if (-not $ready) {
   Write-Host ""
-  Write-Host "[XX] API failed to start (exit code: $($process.ExitCode))." -ForegroundColor Red
-  Write-Host "     Common causes:" -ForegroundColor Yellow
-  Write-Host "       - Port 5000 already in use" -ForegroundColor White
-  Write-Host "       - Missing dependencies (run install.ps1 again)" -ForegroundColor White
-  Write-Host "       - Error in app.py" -ForegroundColor White
-  Write-Host ""
-  Write-Host "     Run manually to see the error:" -ForegroundColor Yellow
-  Write-Host "     $pythonExe $appScript" -ForegroundColor White
+  Write-Host "[XX] API started but is not responding after 5 seconds." -ForegroundColor Red
+  Write-Host "     Check the API window for errors." -ForegroundColor Yellow
+  Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
   exit 1
 }
  
-Write-Host "[OK] Vigilo API running (PID $($process.Id))" -ForegroundColor Green
+Write-Host "[OK] Vigilo API running and responding (PID $($process.Id))" -ForegroundColor Green
  
 # ── Open dashboard in browser ─────────────────────────────────
 Write-Host "[>>] Opening dashboard in browser..." -ForegroundColor Cyan
-Start-Process "http://localhost:5000"
+Start-Process "http://localhost:$PORT"
  
 # ── Instructions ──────────────────────────────────────────────
 Write-Host ""
@@ -77,7 +122,7 @@ Write-Host "  ============================================================" -For
 Write-Host "   Vigilo is running" -ForegroundColor Green
 Write-Host "  ============================================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "   Dashboard     : http://localhost:5000" -ForegroundColor White
+Write-Host "   Dashboard     : http://localhost:$PORT" -ForegroundColor White
 Write-Host "   API PID       : $($process.Id)" -ForegroundColor White
 Write-Host ""
 Write-Host "   To start the network monitor (separate terminal as Admin):" -ForegroundColor Yellow
@@ -87,6 +132,6 @@ Write-Host "   Useful commands:" -ForegroundColor Yellow
 Write-Host "   Find interface : Get-NetAdapter" -ForegroundColor White
 Write-Host "   Find gateway   : Get-NetRoute -DestinationPrefix 0.0.0.0/0" -ForegroundColor White
 Write-Host ""
-Write-Host "   To stop Vigilo : Stop-Process -Id $($process.Id)" -ForegroundColor White
+Write-Host "   To stop Vigilo : Stop-Process -Id $($process.Id) -Force" -ForegroundColor White
 Write-Host ""
  
