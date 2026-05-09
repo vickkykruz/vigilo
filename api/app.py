@@ -11,7 +11,7 @@ Run:
 import os
 import logging
 from datetime import datetime
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_socketio import SocketIO
 from flask_cors import CORS
 from mailer import send_threat_email
@@ -22,7 +22,17 @@ logging.basicConfig(
 )
 log = logging.getLogger("vigilo.api")
  
-app = Flask(__name__)
+# Serve the React dashboard build from dashboard/dist
+DASHBOARD_DIST = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "..", "dashboard", "dist"
+)
+ 
+app = Flask(
+    __name__,
+    static_folder=DASHBOARD_DIST,
+    static_url_path=""
+)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "vigilo-dev-secret")
  
 CORS(app, resources={r"/*": {"origins": "*"}})
@@ -119,4 +129,19 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     log.info(f"Vigilo API starting on port {port}")
     socketio.run(app, host="0.0.0.0", port=port, debug=False)
+ 
+ 
+# ── React dashboard catch-all ─────────────────────────────────────────────────
+# Serves the built React app for any route that is not an API route.
+# Opening http://localhost:5000 in a browser loads the Vigilo dashboard.
+ 
+@app.route("/", defaults={"path": ""})
+@app.route("/<path:path>")
+def serve_dashboard(path):
+    if path.startswith("api/") or path.startswith("socket.io"):
+        return jsonify({"error": "Not found"}), 404
+    target = os.path.join(DASHBOARD_DIST, path)
+    if path and os.path.exists(target):
+        return send_from_directory(DASHBOARD_DIST, path)
+    return send_from_directory(DASHBOARD_DIST, "index.html")
  
