@@ -22,44 +22,34 @@ logging.basicConfig(
 )
 log = logging.getLogger("vigilo.api")
  
-# Resolve the React dashboard dist folder
-# Uses __file__ for reliable path resolution regardless of
-# which directory Flask is launched from
+# ── Dashboard path ─────────────────────────────────────────────────────────────
 _API_DIR       = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT  = os.path.dirname(_API_DIR)
 DASHBOARD_DIST = os.path.join(_PROJECT_ROOT, "dashboard", "dist")
  
-log_tmp = logging.getLogger("vigilo.api")
-log_tmp.info(f"Dashboard dist path: {DASHBOARD_DIST}")
-log_tmp.info(f"Dashboard dist exists: {os.path.exists(DASHBOARD_DIST)}")
+log.info(f"Dashboard dist path   : {DASHBOARD_DIST}")
+log.info(f"Dashboard dist exists : {os.path.exists(DASHBOARD_DIST)}")
  
-# Flask constructor — no static_folder here to avoid conflict
-# with our catch-all route below
+# ── Flask app ──────────────────────────────────────────────────────────────────
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "vigilo-dev-secret")
  
-CORS(app, resources={r"/*": {"origins": "*"}})
+CORS(app, resources={r"/api/*": {"origins": "*"}})
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
  
 # In-memory threat log for the session
 threat_log: list[dict] = []
  
  
-# ── Routes ─────────────────────────────────────────────────────────────────────
+# ── API routes ─────────────────────────────────────────────────────────────────
  
 @app.route("/api/health", methods=["GET"])
 def health():
-    """Simple health check — confirms the API is running."""
     return jsonify({"status": "ok", "service": "vigilo-api"})
  
  
 @app.route("/api/threat", methods=["POST"])
 def receive_threat():
-    """
-    Receives a threat event from the Python monitor.
-    Stores it, pushes it to all connected dashboard clients
-    via Socket.IO, and fires the email alert.
-    """
     data = request.get_json(silent=True)
     if not data:
         return jsonify({"error": "No JSON payload"}), 400
@@ -68,27 +58,24 @@ def receive_threat():
     if not required.issubset(data.keys()):
         return jsonify({"error": "Missing required fields"}), 400
  
-    # Build the threat record
     threat = {
         "id": len(threat_log) + 1,
         "attacker_mac": data["attacker_mac"],
-        "attacker_ip": data["attacker_ip"],
-        "spoofed_ip": data["spoofed_ip"],
-        "interface": data.get("interface", "unknown"),
-        "action": data.get("action", "corrective_arp_broadcast"),
-        "status": data.get("status", "neutralised"),
-        "timestamp": data.get("timestamp", datetime.utcnow().isoformat()),
-        "received_at": datetime.utcnow().isoformat()
+        "attacker_ip":  data["attacker_ip"],
+        "spoofed_ip":   data["spoofed_ip"],
+        "interface":    data.get("interface", "unknown"),
+        "action":       data.get("action", "corrective_arp_broadcast"),
+        "status":       data.get("status", "neutralised"),
+        "timestamp":    data.get("timestamp", datetime.utcnow().isoformat()),
+        "received_at":  datetime.utcnow().isoformat()
     }
  
     threat_log.append(threat)
     log.info(f"Threat received — attacker: {threat['attacker_mac']}")
  
-    # Push to all connected dashboard clients immediately
     socketio.emit("threat_detected", threat)
     log.info("Threat pushed to dashboard via Socket.IO")
  
-    # Fire the email alert
     owner_email = os.environ.get("OWNER_EMAIL", "")
     try:
         send_threat_email(owner_email, threat)
@@ -101,13 +88,11 @@ def receive_threat():
  
 @app.route("/api/threats", methods=["GET"])
 def get_threats():
-    """Returns all threats logged in this session — used by dashboard on load."""
     return jsonify({"threats": threat_log, "count": len(threat_log)})
  
  
 @app.route("/api/threats/clear", methods=["POST"])
 def clear_threats():
-    """Clears the threat log — useful for demo resets."""
     threat_log.clear()
     socketio.emit("threats_cleared", {})
     log.info("Threat log cleared")
@@ -126,6 +111,35 @@ def on_disconnect():
     log.info(f"Dashboard client disconnected: {request.sid}")
  
  
+# ── React dashboard catch-all ──────────────────────────────────────────────────
+# IMPORTANT: Must be defined BEFORE the entry point block.
+# socketio.run() blocks execution — anything after it never runs.
+ 
+@app.route("/", defaults={"path": ""})
+@app.route("/<path:path>")
+def serve_dashboard(path):
+    # API and Socket.IO routes are handled above — return 404 if somehow reached
+    if path.startswith("api/") or path.startswith("socket.io"):
+        return jsonify({"error": "Not found"}), 404
+ 
+    # Dashboard dist folder missing — build has not been run
+    if not os.path.exists(DASHBOARD_DIST):
+        log.error(f"Dashboard dist not found at: {DASHBOARD_DIST}")
+        return jsonify({
+            "error": "Dashboard not built",
+            "fix": "Run: npm run build inside the dashboard folder"
+        }), 503
+ 
+    # Serve static asset if the file exists (JS, CSS, images, fonts)
+    if path:
+        target = os.path.join(DASHBOARD_DIST, path)
+        if os.path.isfile(target):
+            return send_from_directory(DASHBOARD_DIST, path)
+ 
+    # Everything else serves index.html — React Router handles client routing
+    return send_from_directory(DASHBOARD_DIST, "index.html")
+ 
+ 
 # ── Entry point ────────────────────────────────────────────────────────────────
  
 if __name__ == "__main__":
@@ -138,33 +152,4 @@ if __name__ == "__main__":
         debug=False,
         allow_unsafe_werkzeug=True
     )
- 
- 
-# ── React dashboard catch-all ─────────────────────────────────────────────────
-# Serves the built React app for any route that is not an API route.
-# Opening http://localhost:5000 in a browser loads the Vigilo dashboard.
- 
-@app.route("/", defaults={"path": ""})
-@app.route("/<path:path>")
-def serve_dashboard(path):
-    # Let API and Socket.IO routes handle themselves
-    if path.startswith("api/") or path.startswith("socket.io"):
-        return jsonify({"error": "Not found"}), 404
- 
-    # Check if dashboard dist folder exists
-    if not os.path.exists(DASHBOARD_DIST):
-        log.error(f"Dashboard dist not found at: {DASHBOARD_DIST}")
-        return jsonify({
-            "error": "Dashboard not built",
-            "fix": "Run: npm run build inside the dashboard folder"
-        }), 503
- 
-    # Serve the specific file if it exists (JS, CSS, images)
-    if path:
-        target = os.path.join(DASHBOARD_DIST, path)
-        if os.path.isfile(target):
-            return send_from_directory(DASHBOARD_DIST, path)
- 
-    # All other routes serve index.html — React handles routing
-    return send_from_directory(DASHBOARD_DIST, "index.html")
  
