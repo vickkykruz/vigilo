@@ -39,18 +39,62 @@ apt-get install -y -qq \
   net-tools \
   libpcap-dev
  
-# Fix 5: Install Node.js 18+ via NodeSource — apt version is too old
-if ! command -v node &>/dev/null || [ "$(node -e 'process.exit(parseInt(process.version.slice(1)))')" ]; then
-  NODE_MAJOR=$(node --version 2>/dev/null | sed 's/v\([0-9]*\).*/\1/' || echo "0")
-  if [ "$NODE_MAJOR" -lt 18 ] 2>/dev/null; then
-    warn "Installing Node.js 18 via NodeSource..."
-    curl -fsSL https://deb.nodesource.com/setup_18.x | bash - >/dev/null 2>&1
-    apt-get install -y -qq nodejs
+# Detect required Node version from dashboard/package.json engines field.
+# Falls back to 20 if not specified.
+# Then checks if the installed Node meets that requirement.
+# If not — installs the correct version via NodeSource automatically.
+ 
+REQUIRED_NODE=20
+ 
+# Read engines.node from package.json if it exists
+PKG_JSON="$ROOT/dashboard/package.json"
+if [ -f "$PKG_JSON" ] && command -v node &>/dev/null; then
+  ENGINES_NODE=$(node -e "
+    try {
+      const p = require('$PKG_JSON');
+      const v = (p.engines && p.engines.node) || '';
+      const m = v.match(/\d+/);
+      if (m) process.stdout.write(m[0]);
+    } catch(e) {}
+  " 2>/dev/null || echo "")
+  [ -n "$ENGINES_NODE" ] && REQUIRED_NODE="$ENGINES_NODE"
+fi
+ 
+# If no engines field, infer from Vite version in devDependencies
+# Vite 5.x requires Node 18+, Vite 6+/7+/8+ requires Node 20+
+if command -v node &>/dev/null; then
+  VITE_VER=$(node -e "
+    try {
+      const p = require('$PKG_JSON');
+      const v = ((p.devDependencies || {}).vite || '').replace(/[^0-9.].*$/,'').replace(/\^|~/,'');
+      const m = v.match(/^(\d+)/);
+      if (m) process.stdout.write(m[1]);
+    } catch(e) {}
+  " 2>/dev/null || echo "")
+  if [ -n "$VITE_VER" ] && [ "$VITE_VER" -ge 6 ] 2>/dev/null; then
+    REQUIRED_NODE=20
+  elif [ -n "$VITE_VER" ] && [ "$VITE_VER" -eq 5 ] 2>/dev/null; then
+    REQUIRED_NODE=18
   fi
-else
-  warn "Installing Node.js 18 via NodeSource..."
-  curl -fsSL https://deb.nodesource.com/setup_18.x | bash - >/dev/null 2>&1
+fi
+ 
+warn "Required Node.js version : $REQUIRED_NODE+"
+ 
+# Check currently installed Node version
+CURRENT_NODE=0
+if command -v node &>/dev/null; then
+  CURRENT_NODE=$(node --version 2>/dev/null | grep -oP 'v\K[0-9]+' || echo '0')
+fi
+warn "Installed Node.js version: $CURRENT_NODE"
+ 
+if [ "$CURRENT_NODE" -lt "$REQUIRED_NODE" ] 2>/dev/null; then
+  warn "Node.js $CURRENT_NODE is below required $REQUIRED_NODE — upgrading via NodeSource..."
+  curl -fsSL "https://deb.nodesource.com/setup_${REQUIRED_NODE}.x" | bash - >/dev/null 2>&1
   apt-get install -y -qq nodejs
+  INSTALLED=$(node --version)
+  ok "Node.js upgraded to $INSTALLED"
+else
+  ok "Node.js $CURRENT_NODE meets requirement ($REQUIRED_NODE+) — skipping"
 fi
 ok "System dependencies installed — Node $(node --version), Python $(python3 --version)"
  
@@ -106,18 +150,23 @@ fi
 step "Detecting network configuration"
 GATEWAY=$(ip route | grep default | awk '{print $3}' | head -1)
 IFACE=$(ip route | grep default | awk '{print $5}' | head -1)
-warn "Detected gateway  : $GATEWAY"
-warn "Detected interface: $IFACE"
+ok "Detected gateway  : $GATEWAY"
+ok "Detected interface: $IFACE"
+echo ""
+echo "  If these values look correct, just press Enter to continue."
+echo "  If you need to override (e.g. multiple network cards or VPN),"
+echo "  type the correct value and press Enter."
+echo ""
+read -rp "  Gateway IP (Enter to confirm): " CONFIRM_GW || true
+[ -n "${CONFIRM_GW:-}" ] && GATEWAY="$CONFIRM_GW"
  
-# Fix 8: Guard read with || true to prevent set -e exit on EOF
-read -rp "  Press Enter to confirm, or type correct gateway IP: " CONFIRM_GW || true
-if [ -n "${CONFIRM_GW:-}" ]; then
-  GATEWAY="$CONFIRM_GW"
+read -rp "  Interface name (Enter to confirm): " CONFIRM_IF || true
+[ -n "${CONFIRM_IF:-}" ] && IFACE="$CONFIRM_IF"
+ 
+if [ -z "$GATEWAY" ] || [ -z "$IFACE" ]; then
+  fail "Could not determine gateway or interface. Run: ip route"
 fi
-read -rp "  Press Enter to confirm interface, or type correct name: " CONFIRM_IF || true
-if [ -n "${CONFIRM_IF:-}" ]; then
-  IFACE="$CONFIRM_IF"
-fi
+ 
 ok "Using gateway=$GATEWAY interface=$IFACE"
  
 # ── Step 6: Set VITE_API_URL and build dashboard ─────────────

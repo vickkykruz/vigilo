@@ -1,3 +1,5 @@
+Copy
+
 # ============================================================
 # Vigilo — Windows Installer
 # Run as Administrator in PowerShell:
@@ -54,22 +56,119 @@ Write-Ok "Found $pyVersion"
 $pythonExe = $python.Source
  
 # ── Step 2: Check Node.js ─────────────────────────────────────
-Write-Step "Checking Node.js installation"
-$node = Get-Command node -ErrorAction SilentlyContinue
-if (-not $node) {
-  Write-Warn "Node.js not found. Opening download page..."
-  Start-Process "https://nodejs.org/en/download/"
-  Write-Fail "Install Node.js 18+ then re-run this installer."
+Write-Step "Checking Node.js version requirements"
+ 
+# Read required Node version from dashboard/package.json
+# Check engines.node field first, then infer from Vite version
+$requiredNode = 20  # safe default
+$pkgPath = "$ROOT\dashboard\package.json"
+ 
+if (Test-Path $pkgPath) {
+  try {
+    $pkg = Get-Content $pkgPath | ConvertFrom-Json
+ 
+    # Check engines.node field
+    if ($pkg.engines -and $pkg.engines.node) {
+      $enginesMatch = [regex]::Match($pkg.engines.node, '\d+')
+      if ($enginesMatch.Success) {
+        $requiredNode = [int]$enginesMatch.Value
+      }
+    } else {
+      # Infer from Vite version in devDependencies
+      $viteVer = ($pkg.devDependencies.vite -replace '[^\d.].*$','') -replace '[\^~]',''
+      if ($viteVer) {
+        $viteMajor = [int]($viteVer -split '\.')[0]
+        if ($viteMajor -ge 6) { $requiredNode = 20 }
+        elseif ($viteMajor -eq 5) { $requiredNode = 18 }
+      }
+    }
+  } catch {
+    Write-Warn "Could not read package.json — defaulting to Node $requiredNode"
+  }
 }
-$nodeVersion = & node --version 2>&1
-# Check version is 18+
-$nodeMajor = [int]($nodeVersion -replace 'v(\d+)\..*','$1')
-if ($nodeMajor -lt 18) {
-  Write-Warn "Node.js $nodeVersion found but version 18+ is required."
-  Start-Process "https://nodejs.org/en/download/"
-  Write-Fail "Please upgrade Node.js to version 18 or higher."
+ 
+Write-Warn "Required Node.js version  : $requiredNode+"
+ 
+# Check currently installed Node version
+$currentNode = 0
+$nodeCmd = Get-Command node -ErrorAction SilentlyContinue
+if ($nodeCmd) {
+  $nodeVer = & node --version 2>&1
+  $currentNode = [int]($nodeVer -replace 'v(\d+)\..*','$1')
+  Write-Warn "Installed Node.js version : $currentNode ($nodeVer)"
+} else {
+  Write-Warn "Installed Node.js version : not found"
 }
-Write-Ok "Found Node.js $nodeVersion"
+ 
+if ($currentNode -lt $requiredNode) {
+  Write-Warn "Node.js $currentNode is below required $requiredNode — installing automatically..."
+ 
+  $installed = $false
+ 
+  # Method 1: Try winget (available on Windows 11 and modern Windows 10)
+  $winget = Get-Command winget -ErrorAction SilentlyContinue
+  if ($winget) {
+    Write-Warn "Attempting install via winget..."
+    try {
+      $pkgId = if ($requiredNode -ge 20) { "OpenJS.NodeJS.LTS" } else { "OpenJS.NodeJS" }
+      & winget install $pkgId --silent --accept-package-agreements --accept-source-agreements 2>&1 | Out-Null
+      $installed = $true
+      Write-Ok "Node.js installed via winget"
+    } catch {
+      Write-Warn "winget install failed — trying MSI download..."
+    }
+  }
+ 
+  # Method 2: Download MSI directly from Node.js release index
+  if (-not $installed) {
+    Write-Warn "Fetching latest Node.js $requiredNode release info..."
+    try {
+      $releases  = Invoke-WebRequest "https://nodejs.org/dist/index.json" -UseBasicParsing |
+                   ConvertFrom-Json
+      $latest    = $releases |
+                   Where-Object { $_.version -match "^v$requiredNode\." -and $_.lts } |
+                   Select-Object -First 1
+      if (-not $latest) {
+        $latest = $releases |
+                  Where-Object { $_.version -match "^v$requiredNode\." } |
+                  Select-Object -First 1
+      }
+      $msiUrl    = "https://nodejs.org/dist/$($latest.version)/node-$($latest.version)-x64.msi"
+      $msiPath   = "$env:TEMP
+ode-installer.msi"
+ 
+      Write-Warn "Downloading Node.js $($latest.version)..."
+      Invoke-WebRequest -Uri $msiUrl -OutFile $msiPath -UseBasicParsing
+ 
+      Write-Warn "Running Node.js installer silently..."
+      Start-Process msiexec.exe -Wait -ArgumentList "/i `"$msiPath`" /qn ADDLOCAL=ALL"
+      Remove-Item $msiPath -ErrorAction SilentlyContinue
+      $installed = $true
+      Write-Ok "Node.js $($latest.version) installed via MSI"
+    } catch {
+      Write-Warn "Automatic install failed."
+      Write-Warn "Please install Node.js $requiredNode+ manually from https://nodejs.org"
+      Start-Process "https://nodejs.org/en/download/"
+      Write-Fail "Re-run this installer after installing Node.js $requiredNode+."
+    }
+  }
+ 
+  # Refresh PATH so new node is visible in this session
+  $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" +
+              [System.Environment]::GetEnvironmentVariable("Path","User")
+ 
+  # Verify installation
+  $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
+  if ($nodeCmd) {
+    $newVer = & node --version 2>&1
+    Write-Ok "Node.js $newVer is now installed"
+  } else {
+    Write-Fail "Node.js installation could not be verified. Please restart PowerShell and re-run."
+  }
+ 
+} else {
+  Write-Ok "Node.js $currentNode meets requirement ($requiredNode+) — skipping"
+}
  
 # ── Step 3: Install Npcap ─────────────────────────────────────
 Write-Step "Checking Npcap installation"
