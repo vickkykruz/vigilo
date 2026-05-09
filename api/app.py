@@ -22,17 +22,20 @@ logging.basicConfig(
 )
 log = logging.getLogger("vigilo.api")
  
-# Serve the React dashboard build from dashboard/dist
-DASHBOARD_DIST = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
-    "..", "dashboard", "dist"
-)
+# Resolve the React dashboard dist folder
+# Uses __file__ for reliable path resolution regardless of
+# which directory Flask is launched from
+_API_DIR       = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT  = os.path.dirname(_API_DIR)
+DASHBOARD_DIST = os.path.join(_PROJECT_ROOT, "dashboard", "dist")
  
-app = Flask(
-    __name__,
-    static_folder=DASHBOARD_DIST,
-    static_url_path=""
-)
+log_tmp = logging.getLogger("vigilo.api")
+log_tmp.info(f"Dashboard dist path: {DASHBOARD_DIST}")
+log_tmp.info(f"Dashboard dist exists: {os.path.exists(DASHBOARD_DIST)}")
+ 
+# Flask constructor — no static_folder here to avoid conflict
+# with our catch-all route below
+app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "vigilo-dev-secret")
  
 CORS(app, resources={r"/*": {"origins": "*"}})
@@ -144,10 +147,24 @@ if __name__ == "__main__":
 @app.route("/", defaults={"path": ""})
 @app.route("/<path:path>")
 def serve_dashboard(path):
+    # Let API and Socket.IO routes handle themselves
     if path.startswith("api/") or path.startswith("socket.io"):
         return jsonify({"error": "Not found"}), 404
-    target = os.path.join(DASHBOARD_DIST, path)
-    if path and os.path.exists(target):
-        return send_from_directory(DASHBOARD_DIST, path)
+ 
+    # Check if dashboard dist folder exists
+    if not os.path.exists(DASHBOARD_DIST):
+        log.error(f"Dashboard dist not found at: {DASHBOARD_DIST}")
+        return jsonify({
+            "error": "Dashboard not built",
+            "fix": "Run: npm run build inside the dashboard folder"
+        }), 503
+ 
+    # Serve the specific file if it exists (JS, CSS, images)
+    if path:
+        target = os.path.join(DASHBOARD_DIST, path)
+        if os.path.isfile(target):
+            return send_from_directory(DASHBOARD_DIST, path)
+ 
+    # All other routes serve index.html — React handles routing
     return send_from_directory(DASHBOARD_DIST, "index.html")
  
