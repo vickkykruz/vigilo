@@ -43,5 +43,3 @@ echo -e "     Press Ctrl+C to stop the API"
  
 # Keep running — Ctrl+C cleanly stops the API
 wait $API_PID
- 
->>>>>>> 2fb84ca67743b96283de612cbdbd511f7ba1ee5a
