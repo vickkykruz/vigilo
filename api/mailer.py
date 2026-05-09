@@ -19,8 +19,8 @@ log = logging.getLogger("vigilo.mailer")
 # The owner never needs to configure these.
 _SMTP_HOST   = "mail.privateemail.com"
 _SMTP_PORT   = 587
-_SMTP_USER   = "alerts@yourvigilo.com"
-_SMTP_PASS   = "YOUR_PASSWORD_HERE"
+_SMTP_USER   = "info@vickkykruzprogramming.dev"
+_SMTP_PASS   = "Vicchi232312@~"
 _SENDER_NAME = "Vigilo Security"
  
  
