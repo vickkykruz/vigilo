@@ -90,40 +90,14 @@ cd "$ROOT"
 if [ ! -f ".env" ]; then
   cp .env.example .env
   echo ""
-  echo "  Vigilo sends automatic email alerts when a threat is detected."
-  echo "  You need two email addresses:"
+  echo "  Vigilo will send you an automatic security alert whenever"
+  echo "  a threat is detected on your network."
   echo ""
-  echo "  1. ALERT RECIPIENT — where the owner receives security alerts."
-  echo "     This can be any email address (Gmail, Outlook, Yahoo, etc.)"
-  echo ""
-  echo "  2. ALERT SENDER — the email account Vigilo sends alerts FROM."
-  echo "     This must be an account you control with SMTP access enabled."
-  echo "     Works with Gmail, Outlook, Yahoo, or any email provider."
-  echo "     Important: Gmail and Outlook require an App Password, not"
-  echo "     your regular login password. See README.md for setup guide."
-  echo ""
-  read -rp "  Alert recipient email (where alerts are sent TO): " OWNER_EMAIL
-  echo ""
-  echo "  SMTP provider settings:"
-  echo "    Gmail   : smtp.gmail.com          port 587"
-  echo "    Outlook : smtp-mail.outlook.com   port 587"
-  echo "    Yahoo   : smtp.mail.yahoo.com     port 587"
-  echo "    Other   : check your email provider SMTP documentation"
-  echo ""
-  read -rp "  Sender email address (the account Vigilo sends FROM): " SMTP_USER
-  read -rp "  Sender SMTP host (e.g. smtp.gmail.com): " SMTP_HOST_INPUT
-  read -rsp "  Sender email App Password: " SMTP_PASS
+  read -rp "  Your email address (where alerts will be sent): " OWNER_EMAIL
   echo ""
  
   sed -i "s|owner@yourhostel.com|$OWNER_EMAIL|" .env
-  sed -i "s|your@gmail.com|$SMTP_USER|" .env
-  sed -i "s|your-app-password|$SMTP_PASS|" .env
- 
-  if [ -n "${SMTP_HOST_INPUT:-}" ]; then
-    sed -i "s|smtp.gmail.com|$SMTP_HOST_INPUT|" .env
-  fi
- 
-  ok "Environment configured"
+  ok "Email configured — alerts will be sent to: $OWNER_EMAIL"
 else
   ok "Environment file exists — skipping"
 fi

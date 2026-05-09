@@ -138,39 +138,12 @@ if (-not (Test-Path $envFile)) {
   Copy-Item "$ROOT\.env.example" $envFile
  
   Write-Host ""
-  Write-Host "  Vigilo sends automatic email alerts when a threat is detected." -ForegroundColor Cyan
-  Write-Host "  You need two email addresses:" -ForegroundColor Cyan
-  Write-Host ""
-  Write-Host "  1. ALERT RECIPIENT — where the owner receives security alerts."
-  Write-Host "     Any email address works (Gmail, Outlook, Yahoo, etc.)"
-  Write-Host ""
-  Write-Host "  2. ALERT SENDER — the account Vigilo sends alerts FROM."
-  Write-Host "     Must be an account you control with SMTP access enabled."
-  Write-Host "     Gmail and Outlook require an App Password, not your"
-  Write-Host "     regular login password. See README.md for setup guide."
+  Write-Host "  Vigilo will send you an automatic security alert whenever" -ForegroundColor Cyan
+  Write-Host "  a threat is detected on your network." -ForegroundColor Cyan
   Write-Host ""
  
   if (-not $OwnerEmail) {
-    $OwnerEmail = Read-Host "  Alert recipient email (where alerts are sent TO)"
-  }
- 
-  Write-Host ""
-  Write-Host "  SMTP provider settings:" -ForegroundColor Yellow
-  Write-Host "    Gmail   : smtp.gmail.com          port 587"
-  Write-Host "    Outlook : smtp-mail.outlook.com   port 587"
-  Write-Host "    Yahoo   : smtp.mail.yahoo.com     port 587"
-  Write-Host "    Other   : check your provider SMTP documentation"
-  Write-Host ""
- 
-  if (-not $SmtpUser) {
-    $SmtpUser = Read-Host "  Sender email address (the account Vigilo sends FROM)"
-  }
-  $SmtpHostInput = Read-Host "  Sender SMTP host (e.g. smtp.gmail.com)"
-  if (-not $SmtpPass) {
-    $securePass = Read-Host "  Sender email App Password" -AsSecureString
-    $SmtpPass = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
-      [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePass)
-    )
+    $OwnerEmail = Read-Host "  Your email address (where alerts will be sent)"
   }
  
   # Escape special regex chars before using -replace
