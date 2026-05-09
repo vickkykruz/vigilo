@@ -37,8 +37,9 @@ app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "vigilo-dev-secret")
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
  
-# In-memory threat log for the session
-threat_log: list[dict] = []
+# In-memory stores for the session
+threat_log:  list[dict] = []
+device_list: dict       = {"devices": [], "own_ip": "", "gateway_ip": ""}
  
  
 # ── API routes ─────────────────────────────────────────────────────────────────
@@ -97,6 +98,30 @@ def clear_threats():
     socketio.emit("threats_cleared", {})
     log.info("Threat log cleared")
     return jsonify({"status": "cleared"})
+ 
+ 
+@app.route("/api/devices", methods=["POST"])
+def receive_devices():
+    """Receives real device list from the network scanner."""
+    data = request.get_json(silent=True)
+    if not data or "devices" not in data:
+        return jsonify({"error": "Invalid payload"}), 400
+ 
+    device_list["devices"]    = data.get("devices", [])
+    device_list["own_ip"]     = data.get("own_ip", "")
+    device_list["gateway_ip"] = data.get("gateway_ip", "")
+    device_list["updated_at"] = data.get("timestamp", "")
+ 
+    # Push updated device list to dashboard in real time
+    socketio.emit("devices_updated", device_list)
+    log.info(f"Device list updated — {len(device_list['devices'])} device(s)")
+    return jsonify({"status": "received"}), 200
+ 
+ 
+@app.route("/api/devices", methods=["GET"])
+def get_devices():
+    """Returns the current device list — used by dashboard on load."""
+    return jsonify(device_list)
  
  
 # ── Socket.IO events ───────────────────────────────────────────────────────────

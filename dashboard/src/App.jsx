@@ -10,11 +10,14 @@ const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000"
 export default function App() {
   const [threats, setThreats]           = useState([])
   const [connected, setConnected]       = useState(false)
-  const [activeThreat, setActiveThreat] = useState(null)   // current live threat on radar
-  const [neutralised, setNeutralised]   = useState(false)  // neutralised overlay
-  const [flashClass, setFlashClass]     = useState("")      // screen flash
+  const [activeThreat, setActiveThreat] = useState(null)
+  const [neutralised, setNeutralised]   = useState(false)
+  const [flashClass, setFlashClass]     = useState("")
   const [uptime, setUptime]             = useState("00:00")
   const [clock, setClock]               = useState("")
+  const [deviceData, setDeviceData]     = useState({
+    devices: [], own_ip: "", gateway_ip: ""
+  })
   const socketRef  = useRef(null)
   const uptimeRef  = useRef(0)
   const neutralRef = useRef(null)
@@ -38,12 +41,18 @@ export default function App() {
     return () => clearInterval(id)
   }, [])
  
-  // ── Socket.IO ──
+  // ── Socket.IO + initial data fetch ──
   useEffect(() => {
-    // Load existing threats from this session
+    // Load existing threats
     fetch(`${API_URL}/api/threats`)
       .then((r) => r.json())
       .then((data) => { if (data.threats?.length) setThreats(data.threats) })
+      .catch(() => {})
+ 
+    // Load existing device list
+    fetch(`${API_URL}/api/devices`)
+      .then((r) => r.json())
+      .then((data) => { if (data.devices?.length) setDeviceData(data) })
       .catch(() => {})
  
     socketRef.current = io(API_URL, { transports: ["websocket"] })
@@ -51,18 +60,18 @@ export default function App() {
     socketRef.current.on("connect",    () => setConnected(true))
     socketRef.current.on("disconnect", () => setConnected(false))
  
-    socketRef.current.on("threat_detected", (threat) => {
-      // Add to log
-      setThreats((prev) => [threat, ...prev])
+    // Real device list from network scanner
+    socketRef.current.on("devices_updated", (data) => {
+      setDeviceData(data)
+    })
  
-      // Show on radar
+    // Threat detected
+    socketRef.current.on("threat_detected", (threat) => {
+      setThreats((prev) => [threat, ...prev])
       setActiveThreat(threat)
       triggerFlash("rgba(255,45,85,0.12)")
  
-      // Clear any pending neutralise timer
       if (neutralRef.current) clearTimeout(neutralRef.current)
- 
-      // Auto neutralise after 3.5s (matches monitor response time)
       neutralRef.current = setTimeout(() => {
         setNeutralised(true)
         triggerFlash("rgba(0,221,180,0.08)")
@@ -95,15 +104,12 @@ export default function App() {
  
   return (
     <>
-      {/* Screen flash */}
       <div
         className={`threat-flash ${flashClass}`}
         style={{ background: "var(--flash-color, rgba(255,45,85,0.1))" }}
       />
  
       <div className="app">
- 
-        {/* HEADER */}
         <header className="app-header">
           <div className="logo-wrap">
             <div className="logo-mark"/>
@@ -121,15 +127,16 @@ export default function App() {
           </div>
         </header>
  
-        {/* MAIN */}
         <div className="app-main">
- 
-          {/* RADAR PANEL */}
           <div className="radar-panel">
             <div className="radar-title">
               ◈ Live Network Topology — Sentinel Mode Active
             </div>
-            <RadarMap threat={activeThreat} neutralised={neutralised}/>
+            <RadarMap
+              threat={activeThreat}
+              neutralised={neutralised}
+              deviceData={deviceData}
+            />
             <div style={{
               fontSize: "9px", letterSpacing: "2px", color: "var(--text-dim)",
               display: "flex", alignItems: "center", gap: "8px"
@@ -139,28 +146,29 @@ export default function App() {
                 background: connected ? "var(--cyan)" : "var(--red)",
                 display: "inline-block"
               }}/>
-              {connected ? "SENTINEL CONNECTED — LIVE MONITORING" : "CONNECTING TO SENTINEL..."}
+              {connected
+                ? `SENTINEL CONNECTED — ${deviceData.devices.length} DEVICE(S) ON NETWORK`
+                : "CONNECTING TO SENTINEL..."}
             </div>
           </div>
  
-          {/* SIDE PANEL */}
           <div className="side-panel">
             <NetworkStats threats={threats} uptime={uptime}/>
             <ThreatFeed threats={threats} blinking={isThreat}/>
           </div>
         </div>
  
-        {/* STATUS BAR */}
         <footer className="app-footer">
           <span>VIGILO v1.0 &nbsp;|&nbsp; UNIVERSITY OF LANCASHIRE HACKATHON MAY 2026</span>
           <div className="bar-right">
             <div className="bar-dot" style={{ background: isThreat ? "var(--red)" : "var(--cyan)" }}/>
             <span style={{ color: isThreat ? "var(--red)" : "" }}>
-              {isThreat ? "⚠ HOSTILE DEVICE DETECTED — VIGILO RESPONDING" : "ALL SYSTEMS NOMINAL"}
+              {isThreat
+                ? "⚠ HOSTILE DEVICE DETECTED — VIGILO RESPONDING"
+                : "ALL SYSTEMS NOMINAL"}
             </span>
           </div>
         </footer>
- 
       </div>
     </>
   )
