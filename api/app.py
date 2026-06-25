@@ -9,6 +9,7 @@ Run:
 """
  
 import os
+import sys
 import logging
 from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory
@@ -23,9 +24,21 @@ logging.basicConfig(
 log = logging.getLogger("vigilo.api")
  
 # ── Dashboard path ─────────────────────────────────────────────────────────────
-_API_DIR       = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_ROOT  = os.path.dirname(_API_DIR)
-DASHBOARD_DIST = os.path.join(_PROJECT_ROOT, "dashboard", "dist")
+# Handles both running as a script and running as a PyInstaller frozen exe.
+if getattr(sys, "frozen", False):
+    # Running as a bundled executable.
+    # The installer places dashboard/dist next to the exe, so check
+    # the executable's own directory FIRST, then fall back to _MEIPASS.
+    _EXE_DIR = os.path.dirname(sys.executable)
+    DASHBOARD_DIST = os.path.join(_EXE_DIR, "dashboard", "dist")
+    if not os.path.exists(DASHBOARD_DIST):
+        _MEI = getattr(sys, "_MEIPASS", _EXE_DIR)
+        DASHBOARD_DIST = os.path.join(_MEI, "dashboard", "dist")
+else:
+    # Running as a normal Python script
+    _API_DIR       = os.path.dirname(os.path.abspath(__file__))
+    _PROJECT_ROOT  = os.path.dirname(_API_DIR)
+    DASHBOARD_DIST = os.path.join(_PROJECT_ROOT, "dashboard", "dist")
  
 log.info(f"Dashboard dist path   : {DASHBOARD_DIST}")
 log.info(f"Dashboard dist exists : {os.path.exists(DASHBOARD_DIST)}")

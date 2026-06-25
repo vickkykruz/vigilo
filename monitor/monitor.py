@@ -272,9 +272,49 @@ def handle_packet(packet, interface: str, gateway_ip: str,
  
 # ── Entry point ────────────────────────────────────────────────────────────────
  
+def resolve_interface(requested: str) -> str:
+    """
+    Resolve the correct network interface name.
+    Works across Linux (eth0, wlo1) and Windows (GUID-based names).
+    If the requested interface exists, use it. Otherwise auto-detect
+    the interface that has the default route.
+    """
+    from scapy.all import get_if_list, conf
+ 
+    available = get_if_list()
+ 
+    # If a valid interface was explicitly requested, use it
+    if requested and requested in available:
+        return requested
+ 
+    # Try Scapy's own idea of the default route interface
+    try:
+        if conf.iface and str(conf.iface) in [str(i) for i in available]:
+            log.info(f"Auto-detected interface: {conf.iface}")
+            return str(conf.iface)
+    except Exception:
+        pass
+ 
+    # Fall back to conf.iface directly (Scapy resolves the best one)
+    try:
+        detected = str(conf.iface)
+        log.info(f"Using Scapy default interface: {detected}")
+        return detected
+    except Exception:
+        pass
+ 
+    # Last resort - first non-loopback interface
+    for iface in available:
+        if "loopback" not in iface.lower() and "lo" != iface.lower():
+            log.warning(f"Falling back to interface: {iface}")
+            return iface
+ 
+    return requested or "eth0"
+ 
+ 
 def main():
     parser = argparse.ArgumentParser(description="Vigilo Network Monitor")
-    parser.add_argument("--interface", default="eth0")
+    parser.add_argument("--interface", default="")
     parser.add_argument("--gateway",   required=True)
     parser.add_argument("--api",       default="http://localhost:5000")
     parser.add_argument("--scan-interval", type=int, default=30,
@@ -282,6 +322,11 @@ def main():
     args = parser.parse_args()
  
     conf.verb = 0
+ 
+    # Resolve the network interface. On Windows the interface is not
+    # named "eth0" - Scapy uses a different naming. If no interface is
+    # given, or the given one does not exist, auto-detect the active one.
+    args.interface = resolve_interface(args.interface)
  
     log.info(f"Vigilo monitor starting on {args.interface}")
     log.info(f"Gateway : {args.gateway}")
