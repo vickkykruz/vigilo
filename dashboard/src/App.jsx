@@ -3,6 +3,7 @@ import { io } from "socket.io-client"
 import RadarMap from "./components/RadarMap"
 import NetworkStats from "./components/NetworkStats"
 import ThreatFeed from "./components/ThreatFeed"
+import OnboardingAssessment from "./components/OnboardingAssessment"
 import "./App.css"
  
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000"
@@ -18,6 +19,8 @@ export default function App() {
   const [deviceData, setDeviceData]     = useState({
     devices: [], own_ip: "", gateway_ip: ""
   })
+  const [assessment, setAssessment]     = useState(null)
+  const [showAssessment, setShowAssessment] = useState(false)
   const socketRef  = useRef(null)
   const uptimeRef  = useRef(0)
   const neutralRef = useRef(null)
@@ -55,6 +58,20 @@ export default function App() {
       .then((data) => { if (data.devices?.length) setDeviceData(data) })
       .catch(() => {})
  
+    // Load assessment - show it if this user has not dismissed it yet
+    fetch(`${API_URL}/api/assessment`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data && typeof data.score === "number") {
+          setAssessment(data)
+          // Only auto-show if the user has not seen it this session
+          if (!sessionStorage.getItem("vigilo_assessment_seen")) {
+            setShowAssessment(true)
+          }
+        }
+      })
+      .catch(() => {})
+ 
     socketRef.current = io(API_URL, { transports: ["websocket"] })
  
     socketRef.current.on("connect",    () => setConnected(true))
@@ -63,6 +80,14 @@ export default function App() {
     // Real device list from network scanner
     socketRef.current.on("devices_updated", (data) => {
       setDeviceData(data)
+    })
+ 
+    // Onboarding assessment arrives after the first scan
+    socketRef.current.on("assessment_ready", (data) => {
+      setAssessment(data)
+      if (!sessionStorage.getItem("vigilo_assessment_seen")) {
+        setShowAssessment(true)
+      }
     })
  
     // Threat detected
@@ -102,8 +127,19 @@ export default function App() {
  
   const isThreat = !!activeThreat && !neutralised
  
+  function dismissAssessment() {
+    sessionStorage.setItem("vigilo_assessment_seen", "1")
+    setShowAssessment(false)
+  }
+ 
   return (
     <>
+      {showAssessment && assessment && (
+        <OnboardingAssessment
+          assessment={assessment}
+          onContinue={dismissAssessment}
+        />
+      )}
       <div
         className={`threat-flash ${flashClass}`}
         style={{ background: "var(--flash-color, rgba(255,45,85,0.1))" }}

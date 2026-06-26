@@ -179,15 +179,143 @@ def check_network_alive(interface: str) -> bool:
         return False
  
  
+def build_assessment(devices: list[dict], own_ip: str,
+                     gateway_ip: str, subnet: str) -> dict:
+    """
+    Analyses the network scan and produces a plain-English assessment:
+    a health score (0-100), a list of findings, and an action list.
+    This is the Onboarding Assessment shown to the user on first run.
+    """
+    findings = []
+    actions = []
+    score = 100
+ 
+    # Count devices that are not this machine and not the router
+    other_devices = [
+        d for d in devices
+        if d["ip"] != own_ip and d["ip"] != gateway_ip
+    ]
+    total_devices = len(devices)
+ 
+    # ── Finding 1: shared network (the big one) ──
+    if len(other_devices) > 0:
+        score -= 20
+        findings.append({
+            "level": "warning",
+            "title": "Your network is shared with other devices",
+            "detail": (
+                f"Your device shares this network with {len(other_devices)} "
+                f"other device(s). On a shared network, an intruder could "
+                f"attempt to intercept your internet traffic, including your "
+                f"login details for booking sites and email."
+            ),
+        })
+        actions.append({
+            "priority": 1,
+            "text": "Set up a separate guest Wi-Fi network on your router so "
+                    "visitors cannot share the same network as your business devices.",
+        })
+    else:
+        findings.append({
+            "level": "good",
+            "title": "No other devices detected on your network",
+            "detail": "Your device currently appears to be alone on this "
+                      "network, which is the safest situation.",
+        })
+ 
+    # ── Finding 2: large network (bigger attack surface) ──
+    if total_devices > 10:
+        score -= 10
+        findings.append({
+            "level": "warning",
+            "title": "Many devices are connected to your network",
+            "detail": (
+                f"There are {total_devices} devices on your network. The more "
+                f"devices connected, the more opportunities an attacker has to "
+                f"find a way in."
+            ),
+        })
+        actions.append({
+            "priority": 2,
+            "text": "Review the devices on your network and disconnect any you "
+                    "do not recognise.",
+        })
+ 
+    # ── Finding 3: unrecognised devices ──
+    if len(other_devices) >= 3:
+        score -= min(15, len(other_devices) * 3)
+        findings.append({
+            "level": "warning",
+            "title": "Several devices could not be identified",
+            "detail": (
+                f"{len(other_devices)} devices on your network do not have a "
+                f"recognised name. These could be guest phones and laptops, "
+                f"but it is worth confirming you know what each one is."
+            ),
+        })
+        actions.append({
+            "priority": 3,
+            "text": "Check the list of connected devices and make sure you "
+                    "recognise each one.",
+        })
+ 
+    # ── Finding 4: gateway protection (always good once detected) ──
+    if gateway_ip:
+        findings.append({
+            "level": "good",
+            "title": "Vigilo is actively protecting your connection",
+            "detail": "Vigilo has identified your router and is now watching "
+                      "for any device trying to intercept your traffic. If an "
+                      "attack happens, it will be blocked automatically.",
+        })
+ 
+    # Clamp the score
+    score = max(0, min(100, score))
+ 
+    # Overall status label
+    if score >= 85:
+        status = "good"
+        summary = "Your network is in good shape. Vigilo is protecting you."
+    elif score >= 60:
+        status = "fair"
+        summary = "Your network has a few things worth improving. See the actions below."
+    else:
+        status = "attention"
+        summary = "Your network needs attention. Please review the actions below."
+ 
+    return {
+        "score": score,
+        "status": status,
+        "summary": summary,
+        "findings": findings,
+        "actions": sorted(actions, key=lambda a: a["priority"]),
+        "device_count": total_devices,
+        "subnet": subnet,
+    }
+ 
+ 
+def report_assessment(api_url: str, assessment: dict) -> None:
+    """POST the onboarding assessment to the API."""
+    try:
+        requests.post(f"{api_url}/api/assessment", json=assessment, timeout=5)
+        log.info(f"Assessment reported - health score: {assessment['score']}")
+    except requests.exceptions.ConnectionError:
+        log.warning("API unreachable - assessment not reported")
+    except Exception as e:
+        log.warning(f"Assessment report error: {e}")
+ 
+ 
 def device_scan_loop(interface: str, gateway_ip: str,
                      api_url: str, interval: int = 30) -> None:
     """
     Background thread — scans the network every `interval` seconds
     and reports real devices to the dashboard.
+    On the first scan, also builds and reports the Onboarding Assessment.
     Exits cleanly when _stop_event is set (network drop detected).
     """
     own_ip = get_own_ip(interface)
     log.info(f"Device scanner started — scanning every {interval}s")
+    first_scan = True
  
     while not _stop_event.is_set():
         try:
@@ -200,6 +328,12 @@ def device_scan_loop(interface: str, gateway_ip: str,
             subnet  = get_subnet(interface)
             devices = scan_network(subnet, interface)
             report_devices(api_url, devices, own_ip, gateway_ip)
+ 
+            # On the very first scan, build the onboarding assessment
+            if first_scan:
+                assessment = build_assessment(devices, own_ip, gateway_ip, subnet)
+                report_assessment(api_url, assessment)
+                first_scan = False
  
             # Seed ARP table with discovered devices
             for device in devices:

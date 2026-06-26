@@ -53,6 +53,7 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 # In-memory stores for the session
 threat_log:  list[dict] = []
 device_list: dict       = {"devices": [], "own_ip": "", "gateway_ip": ""}
+assessment_data: dict   = {}
  
  
 # ── API routes ─────────────────────────────────────────────────────────────────
@@ -135,6 +136,25 @@ def receive_devices():
 def get_devices():
     """Returns the current device list — used by dashboard on load."""
     return jsonify(device_list)
+ 
+ 
+@app.route("/api/assessment", methods=["POST"])
+def receive_assessment():
+    """Receives the onboarding assessment from the monitor."""
+    global assessment_data
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "Invalid payload"}), 400
+    assessment_data = data
+    socketio.emit("assessment_ready", assessment_data)
+    log.info(f"Assessment received - health score: {data.get('score')}")
+    return jsonify({"status": "received"}), 200
+ 
+ 
+@app.route("/api/assessment", methods=["GET"])
+def get_assessment():
+    """Returns the onboarding assessment - used by dashboard on load."""
+    return jsonify(assessment_data)
  
  
 # ── Socket.IO events ───────────────────────────────────────────────────────────
