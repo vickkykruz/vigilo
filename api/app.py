@@ -201,7 +201,7 @@ def serve_dashboard(path):
 # ── Entry point ────────────────────────────────────────────────────────────────
  
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 47823))
     log.info(f"Vigilo API starting on port {port}")
     socketio.run(
         app,

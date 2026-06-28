@@ -6,7 +6,7 @@ import ThreatFeed from "./components/ThreatFeed"
 import OnboardingAssessment from "./components/OnboardingAssessment"
 import "./App.css"
  
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000"
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:47823"
  
 export default function App() {
   const [threats, setThreats]           = useState([])

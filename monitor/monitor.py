@@ -8,7 +8,7 @@ Also performs periodic network scans to discover real devices
 and reports them to the dashboard for live radar display.
  
 Run as root:
-    sudo python3 monitor.py --interface eth0 --gateway 192.168.1.1 --api http://localhost:5000
+    sudo python3 monitor.py --interface eth0 --gateway 192.168.1.1 --api http://localhost:47823
 """
  
 import time
@@ -446,11 +446,49 @@ def resolve_interface(requested: str) -> str:
     return requested or "eth0"
  
  
+def resolve_gateway(requested: str, interface: str) -> str:
+    """
+    Resolve the default gateway IP address.
+    If one was provided, use it. Otherwise auto-detect it from the
+    system routing table. Works on both Windows and Linux.
+    """
+    if requested:
+        return requested
+ 
+    # Try Scapy's routing table first (cross-platform)
+    try:
+        from scapy.all import conf
+        gw = conf.route.route("0.0.0.0")[2]
+        if gw and gw != "0.0.0.0":
+            log.info(f"Auto-detected gateway: {gw}")
+            return gw
+    except Exception:
+        pass
+ 
+    # Linux fallback - parse `ip route`
+    try:
+        import subprocess
+        out = subprocess.check_output(
+            ["ip", "route"], stderr=subprocess.DEVNULL
+        ).decode()
+        for line in out.splitlines():
+            if line.startswith("default"):
+                parts = line.split()
+                gw = parts[parts.index("via") + 1]
+                log.info(f"Auto-detected gateway (ip route): {gw}")
+                return gw
+    except Exception:
+        pass
+ 
+    log.warning("Could not auto-detect gateway")
+    return ""
+ 
+ 
 def main():
     parser = argparse.ArgumentParser(description="Vigilo Network Monitor")
     parser.add_argument("--interface", default="")
-    parser.add_argument("--gateway",   required=True)
-    parser.add_argument("--api",       default="http://localhost:5000")
+    parser.add_argument("--gateway",   default="")
+    parser.add_argument("--api",       default="http://localhost:47823")
     parser.add_argument("--scan-interval", type=int, default=30,
                         help="Seconds between network scans (default: 30)")
     args = parser.parse_args()
@@ -462,6 +500,25 @@ def main():
     # given, or the given one does not exist, auto-detect the active one.
     args.interface = resolve_interface(args.interface)
  
+    # Resolve the gateway. If not provided, auto-detect from routing table.
+    args.gateway = resolve_gateway(args.gateway, args.interface)
+ 
+    if not args.gateway:
+        log.warning("No gateway available yet - waiting for network...")
+        # Wait for a network to appear rather than crashing
+        import time as _t
+        for _ in range(60):
+            if _stop_event.is_set():
+                return
+            _t.sleep(2)
+            args.gateway = resolve_gateway("", args.interface)
+            if args.gateway:
+                args.interface = resolve_interface("")
+                break
+        if not args.gateway:
+            log.error("No network detected after waiting. Exiting.")
+            return
+ 
     log.info(f"Vigilo monitor starting on {args.interface}")
     log.info(f"Gateway : {args.gateway}")
     log.info(f"API     : {args.api}")
@@ -471,9 +528,9 @@ def main():
     gateway_mac = get_mac(args.gateway, args.interface)
     if gateway_mac:
         arp_table[args.gateway] = gateway_mac
-        log.info(f"Gateway verified: {args.gateway} → {gateway_mac}")
+        log.info(f"Gateway verified: {args.gateway} -> {gateway_mac}")
     else:
-        log.warning("Could not resolve gateway MAC — proceeding without seed")
+        log.warning("Could not resolve gateway MAC - proceeding without seed")
  
     # Start background device scanner thread
     scanner = threading.Thread(
